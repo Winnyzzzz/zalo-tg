@@ -1,0 +1,46 @@
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+export const config = {
+  // Telegram
+  tg: {
+    token: process.env.TG_TOKEN || '',
+    groupId: parseInt(process.env.TG_GROUP_ID || '0'),
+  },
+
+  // Zalo
+  zalo: {
+    dataDir: process.env.DATA_DIR || './data',
+  },
+
+  // Groq AI
+  ai: {
+    provider: (process.env.AI_PROVIDER || 'groq').toLowerCase(),
+    groq: {
+      apiKey: process.env.GROQ_API_KEY || '',
+    },
+    enabled: process.env.AI_ENABLED === 'true',
+    autoReply: {
+      enabled: process.env.AUTO_REPLY_ENABLED === 'true',
+      delayMs: parseInt(process.env.AUTO_REPLY_DELAY_MS || '1000'),
+      maxContextLength: parseInt(process.env.AUTO_REPLY_MAX_CONTEXT || '10'),
+      style: (process.env.AUTO_REPLY_STYLE || 'friendly') as 'friendly' | 'professional' | 'casual',
+    },
+  },
+};
+
+// Validate config
+if (!config.tg.token) {
+  throw new Error('TG_TOKEN environment variable is required');
+}
+
+if (!config.tg.groupId) {
+  throw new Error('TG_GROUP_ID environment variable is required');
+}
+
+if (config.ai.enabled && config.ai.provider === 'groq' && !config.ai.groq.apiKey) {
+  throw new Error('GROQ_API_KEY environment variable is required when AI_ENABLED=true');
+}
+
+export default config;

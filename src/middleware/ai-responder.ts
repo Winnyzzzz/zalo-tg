@@ -9,8 +9,13 @@ export interface AIResponderOptions {
   respondToMentions: boolean;
   respondToQuestions: boolean;
   respondToRandomMessages: boolean;
-  randomChance: number; // 0-1
+  randomChance: number;
+  cooldownMs: number;
+  maxHistory: number;
+  allowedThreads: readonly string[];
 }
+
+interface HistoryItem { role: 'user' | 'assistant'; content: string }
 
 export class AIResponder {
   private enabled: boolean;
@@ -21,97 +26,101 @@ export class AIResponder {
   private respondToQuestions: boolean;
   private respondToRandomMessages: boolean;
   private randomChance: number;
+  private cooldownMs: number;
+  private maxHistory: number;
+  private allowedThreads: Set<string>;
+
+  // per-thread state
+  private lastReplyAt = new Map<string, number>();
+  private history    = new Map<string, HistoryItem[]>();
 
   constructor(options: AIResponderOptions) {
     this.enabled = options.enabled;
     this.groqProvider = options.groqProvider;
     this.style = options.style || 'friendly';
-    this.delayMs = options.delayMs || 1000;
+    this.delayMs = options.delayMs ?? 1500;
     this.respondToMentions = options.respondToMentions !== false;
     this.respondToQuestions = options.respondToQuestions !== false;
-    this.respondToRandomMessages = options.respondToRandomMessages !== false;
-    this.randomChance = Math.min(Math.max(options.randomChance || 0.3, 0), 1);
+    this.respondToRandomMessages = options.respondToRandomMessages === true;
+    this.randomChance = Math.min(Math.max(options.randomChance ?? 0.05, 0), 1);
+    this.cooldownMs = Math.max(options.cooldownMs ?? 15000, 0);
+    this.maxHistory = Math.max(options.maxHistory ?? 6, 0);
+    this.allowedThreads = new Set(options.allowedThreads ?? []);
   }
 
-  isEnabled(): boolean {
-    return this.enabled;
+  isEnabled(): boolean { return this.enabled; }
+  setEnabled(v: boolean) { this.enabled = v; }
+  getStyle() { return this.style; }
+  setStyle(s: string) { this.style = s; }
+
+  private isThreadAllowed(threadId: string): boolean {
+    if (this.allowedThreads.size === 0) return true;
+    return this.allowedThreads.has(threadId);
   }
 
+  private isInCooldown(threadId: string): boolean {
+    const last = this.lastReplyAt.get(threadId);
+    if (!last) return false;
+    return Date.now() - last < this.cooldownMs;
+  }
+
+  /**
+   * Decide whether bot should reply to this message.
+   */
   shouldRespond(
     message: string,
-    options?: {
+    opts: {
+      threadId: string;
       isMention?: boolean;
       isCommand?: boolean;
+      isFromSelf?: boolean;
       minLength?: number;
-    }
+    },
   ): boolean {
     if (!this.enabled) return false;
+    if (opts.isFromSelf) return false;             // chống loop
+    if (opts.isCommand || message.startsWith('/')) return false;
+    if (message.trim().length < (opts.minLength ?? 3)) return false;
+    if (!this.isThreadAllowed(opts.threadId)) return false;
+    if (this.isInCooldown(opts.threadId)) return false;
 
-    const minLength = options?.minLength || 3;
-    const isCommand = options?.isCommand || message.startsWith('/');
-    const isMention = options?.isMention || false;
-
-    // Never respond to commands
-    if (isCommand) return false;
-
-    // Don't respond to very short messages
-    if (message.trim().length < minLength) return false;
-
-    // Respond to mentions
-    if (isMention && this.respondToMentions) return true;
-
-    // Respond to questions
-    if (this.respondToQuestions && (message.includes('?') || message.includes('？'))) {
-      return true;
-    }
-
-    // Random response
-    if (this.respondToRandomMessages && Math.random() < this.randomChance) {
-      return true;
-    }
-
+    if (opts.isMention && this.respondToMentions) return true;
+    if (this.respondToQuestions && /[?？]/.test(message)) return true;
+    if (this.respondToRandomMessages && Math.random() < this.randomChance) return true;
     return false;
   }
 
-  async generateResponse(message: string): Promise<string | null> {
-    try {
-      const systemPrompt = getSystemPrompt(this.style);
-      const response = await this.groqProvider.generateResponse(message, systemPrompt);
+  private pushHistory(threadId: string, item: HistoryItem) {
+    if (this.maxHistory === 0) return;
+    const arr = this.history.get(threadId) ?? [];
+    arr.push(item);
+    while (arr.length > this.maxHistory * 2) arr.shift();
+    this.history.set(threadId, arr);
+  }
 
-      if (response.error) {
-        console.error('AI Responder error:', response.error);
+  /** Generate a reply with delay + cooldown + history context. */
+  async generateReply(threadId: string, userText: string): Promise<string | null> {
+    try {
+      // Mark cooldown immediately to avoid concurrent replies
+      this.lastReplyAt.set(threadId, Date.now());
+      if (this.delayMs > 0) await new Promise(r => setTimeout(r, this.delayMs));
+
+      const systemPrompt = getSystemPrompt(this.style);
+      const ctx = this.history.get(threadId) ?? [];
+      const resp = await this.groqProvider.generateResponseWithContext(
+        userText, systemPrompt, ctx,
+      );
+      if (resp.error || !resp.content) {
+        if (resp.error) console.error('[AI] error:', resp.error);
         return null;
       }
-
-      return response.content || null;
-    } catch (error) {
-      console.error('AI Responder exception:', error);
+      this.pushHistory(threadId, { role: 'user', content: userText });
+      this.pushHistory(threadId, { role: 'assistant', content: resp.content });
+      this.lastReplyAt.set(threadId, Date.now());
+      return resp.content;
+    } catch (e) {
+      console.error('[AI] exception:', e);
       return null;
     }
-  }
-
-  async generateResponseWithDelay(message: string): Promise<string | null> {
-    await new Promise((resolve) => setTimeout(resolve, this.delayMs));
-    return this.generateResponse(message);
-  }
-
-  setStyle(style: string): void {
-    this.style = style;
-  }
-
-  getStyle(): string {
-    return this.style;
-  }
-
-  setDelay(delayMs: number): void {
-    this.delayMs = Math.max(delayMs, 0);
-  }
-
-  getDelay(): number {
-    return this.delayMs;
-  }
-
-  setEnabled(enabled: boolean): void {
-    this.enabled = enabled;
   }
 }

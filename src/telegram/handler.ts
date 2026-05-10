@@ -8,6 +8,7 @@ import { tgBot } from './bot.js';
 import { config } from '../config.js';
 import { downloadToTemp, cleanTemp, convertToM4a } from '../utils/media.js';
 import { triggerQRLogin } from '../zalo/client.js';
+import { getAIResponder } from '../middleware/index.js';
 
 // ── Mention resolution helper ──────────────────────────────────────────────
 
@@ -152,6 +153,7 @@ export function setupTelegramHandler(
 ): (api: ZaloAPI) => void {
   /** Mutable reference so /login can swap in a new API instance. */
   let currentApi: ZaloAPI | null = initialApi;
+  const aiResponder = getAIResponder();
 
   /** Exposed setter so index.ts can inject the auto-logged-in API. */
   const setCurrentApi = (api: ZaloAPI) => { currentApi = api; };
@@ -163,6 +165,49 @@ export function setupTelegramHandler(
       currentApi = newApi;
       void onZaloLogin(newApi).catch((e: unknown) => console.error('[/login] onZaloLogin error:', e));
     });
+  });
+
+  // ── AI control commands ───────────────────────────────────────────────────
+  const aiReply = (ctx: { chat: { id: number }; message: { message_thread_id?: number }; telegram: typeof tgBot.telegram }, text: string) =>
+    ctx.telegram.sendMessage(ctx.chat.id, text, {
+      message_thread_id: ctx.message.message_thread_id,
+      parse_mode: 'HTML',
+    } as { message_thread_id?: number; parse_mode: 'HTML' });
+
+  tgBot.command('ai_status', async (ctx) => {
+    if (ctx.chat.id !== config.telegram.groupId) return;
+    if (!aiResponder) { await aiReply(ctx, '🤖 AI <b>chưa cấu hình</b> (thiếu GROQ_API_KEY hoặc AI_ENABLED=false).'); return; }
+    await aiReply(ctx,
+      `🤖 <b>AI status</b>\n` +
+      `• Enabled: <b>${aiResponder.isEnabled() ? 'ON' : 'OFF'}</b>\n` +
+      `• Style: <b>${aiResponder.getStyle()}</b>\n` +
+      `• Model: <code>${config.ai.groqModel}</code>`);
+  });
+
+  tgBot.command('ai_on', async (ctx) => {
+    if (ctx.chat.id !== config.telegram.groupId) return;
+    if (!aiResponder) { await aiReply(ctx, '⚠️ AI chưa cấu hình.'); return; }
+    aiResponder.setEnabled(true);
+    await aiReply(ctx, '✅ AI auto-reply đã <b>BẬT</b>.');
+  });
+
+  tgBot.command('ai_off', async (ctx) => {
+    if (ctx.chat.id !== config.telegram.groupId) return;
+    if (!aiResponder) { await aiReply(ctx, '⚠️ AI chưa cấu hình.'); return; }
+    aiResponder.setEnabled(false);
+    await aiReply(ctx, '🛑 AI auto-reply đã <b>TẮT</b>.');
+  });
+
+  tgBot.command('ai_style', async (ctx) => {
+    if (ctx.chat.id !== config.telegram.groupId) return;
+    if (!aiResponder) { await aiReply(ctx, '⚠️ AI chưa cấu hình.'); return; }
+    const arg = (ctx.message.text ?? '').split(/\s+/)[1]?.toLowerCase();
+    const allowed = ['friendly', 'professional', 'casual', 'creative'];
+    if (!arg || !allowed.includes(arg)) {
+      await aiReply(ctx, `Dùng: <code>/ai_style ${allowed.join('|')}</code>`); return;
+    }
+    aiResponder.setStyle(arg);
+    await aiReply(ctx, `🎨 AI style → <b>${arg}</b>`);
   });
 
   // /topic – manage bridge topic mappings

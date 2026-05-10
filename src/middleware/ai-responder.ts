@@ -1,84 +1,117 @@
-import { AIProvider } from '../ai/groq-provider';
+import { GroqProvider } from '../ai/groq-provider';
+import { getSystemPrompt } from '../ai/prompt-templates';
 
-export interface AIResponderConfig {
+export interface AIResponderOptions {
   enabled: boolean;
+  groqProvider: GroqProvider;
+  style: string;
   delayMs: number;
-  maxContextLength: number;
+  respondToMentions: boolean;
+  respondToQuestions: boolean;
+  respondToRandomMessages: boolean;
+  randomChance: number; // 0-1
 }
 
 export class AIResponder {
-  private aiProvider: AIProvider;
-  private config: AIResponderConfig;
-  private messageHistory: Map<string, string[]> = new Map();
+  private enabled: boolean;
+  private groqProvider: GroqProvider;
+  private style: string;
+  private delayMs: number;
+  private respondToMentions: boolean;
+  private respondToQuestions: boolean;
+  private respondToRandomMessages: boolean;
+  private randomChance: number;
 
-  constructor(aiProvider: AIProvider, config: AIResponderConfig) {
-    this.aiProvider = aiProvider;
-    this.config = config;
+  constructor(options: AIResponderOptions) {
+    this.enabled = options.enabled;
+    this.groqProvider = options.groqProvider;
+    this.style = options.style || 'friendly';
+    this.delayMs = options.delayMs || 1000;
+    this.respondToMentions = options.respondToMentions !== false;
+    this.respondToQuestions = options.respondToQuestions !== false;
+    this.respondToRandomMessages = options.respondToRandomMessages !== false;
+    this.randomChance = Math.min(Math.max(options.randomChance || 0.3, 0), 1);
   }
 
-  async shouldRespond(
-    message: string,
-    senderId: string,
-    isMention: boolean = false
-  ): Promise<boolean> {
-    if (!this.config.enabled || !this.aiProvider.isEnabled()) {
-      return false;
-    }
+  isEnabled(): boolean {
+    return this.enabled;
+  }
 
-    // Always respond to mentions
-    if (isMention) {
-      return true;
+  shouldRespond(
+    message: string,
+    options?: {
+      isMention?: boolean;
+      isCommand?: boolean;
+      minLength?: number;
     }
+  ): boolean {
+    if (!this.enabled) return false;
+
+    const minLength = options?.minLength || 3;
+    const isCommand = options?.isCommand || message.startsWith('/');
+    const isMention = options?.isMention || false;
+
+    // Never respond to commands
+    if (isCommand) return false;
 
     // Don't respond to very short messages
-    if (message.length < 3) {
-      return false;
-    }
+    if (message.trim().length < minLength) return false;
 
-    // Don't respond to commands (start with /)
-    if (message.startsWith('/')) {
-      return false;
-    }
+    // Respond to mentions
+    if (isMention && this.respondToMentions) return true;
 
-    // Respond to questions (contain ?)
-    if (message.includes('?')) {
+    // Respond to questions
+    if (this.respondToQuestions && (message.includes('?') || message.includes('？'))) {
       return true;
     }
 
-    // Random chance to respond to normal messages (30%)
-    return Math.random() < 0.3;
+    // Random response
+    if (this.respondToRandomMessages && Math.random() < this.randomChance) {
+      return true;
+    }
+
+    return false;
   }
 
-  async generateResponse(message: string, senderId: string): Promise<string> {
-    const context = this.getContext(senderId);
-
+  async generateResponse(message: string): Promise<string | null> {
     try {
-      // Add delay to seem more natural
-      await new Promise((resolve) => setTimeout(resolve, this.config.delayMs));
+      const systemPrompt = getSystemPrompt(this.style);
+      const response = await this.groqProvider.generateResponse(message, systemPrompt);
 
-      const response = await this.aiProvider.generateResponse(message, context);
-      this.addToHistory(senderId, message, response);
-      return response;
+      if (response.error) {
+        console.error('AI Responder error:', response.error);
+        return null;
+      }
+
+      return response.content || null;
     } catch (error) {
-      console.error('AI response generation failed:', error);
-      throw error;
+      console.error('AI Responder exception:', error);
+      return null;
     }
   }
 
-  private getContext(senderId: string): string {
-    const history = this.messageHistory.get(senderId) || [];
-    return history.slice(-3).join(' | '); // Last 3 messages as context
+  async generateResponseWithDelay(message: string): Promise<string | null> {
+    await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+    return this.generateResponse(message);
   }
 
-  private addToHistory(senderId: string, message: string, response: string): void {
-    const history = this.messageHistory.get(senderId) || [];
-    history.push(`User: ${message}`, `Bot: ${response}`);
+  setStyle(style: string): void {
+    this.style = style;
+  }
 
-    // Keep only last N messages
-    if (history.length > this.config.maxContextLength) {
-      history.splice(0, history.length - this.config.maxContextLength);
-    }
+  getStyle(): string {
+    return this.style;
+  }
 
-    this.messageHistory.set(senderId, history);
+  setDelay(delayMs: number): void {
+    this.delayMs = Math.max(delayMs, 0);
+  }
+
+  getDelay(): number {
+    return this.delayMs;
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
   }
 }

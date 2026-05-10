@@ -1,111 +1,248 @@
-# Groq AI Setup Guide
+# Groq AI Auto-Reply Setup Guide
 
-## Step 1: Get Groq API Key
+## Overview
 
-1. Go to https://console.groq.com/keys
-2. Sign up with your account (free)
+This guide explains how to set up Groq AI auto-reply functionality for the Zalo-Telegram bridge.
+
+## What is Groq?
+
+**Groq** is a free AI inference platform that provides:
+- ✅ **100% free** - No credit card required
+- ⚡ **Ultra-fast** - Real-time inference (200+ tokens/sec)
+- 🚀 **High quality** - Mixtral 8x7B model
+- 🔓 **Open API** - Easy integration
+
+## Prerequisites
+
+1. Node.js >= 18
+2. npm >= 9
+3. Groq API key (free)
+
+## Setup Steps
+
+### Step 1: Get Groq API Key
+
+1. Visit https://console.groq.com/keys
+2. Sign up (free, no credit card needed)
 3. Create a new API key
-4. Copy the key (it looks like: `gsk_...`)
+4. Copy the key (looks like: `gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`)
 
-## Step 2: Configure Environment Variables
+### Step 2: Update .env File
 
-1. Copy `.env.example` to `.env`
-   ```bash
-   cp .env.example .env
-   ```
+```bash
+cp .env.example .env
+```
 
-2. Add your Groq API key:
-   ```env
-   GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxx
-   AI_ENABLED=true
-   AUTO_REPLY_ENABLED=true
-   ```
+Edit `.env` and add:
 
-## Step 3: Install Dependencies
+```env
+# Groq AI Configuration
+AI_ENABLED=true
+GROQ_API_KEY=gsk_your_api_key_here
+GROQ_MODEL=mixtral-8x7b-32768
+AI_STYLE=friendly
+
+# Auto-Reply Settings
+AUTO_REPLY_ENABLED=true
+AUTO_REPLY_DELAY_MS=1000
+AUTO_REPLY_RESPOND_TO_MENTIONS=true
+AUTO_REPLY_RESPOND_TO_QUESTIONS=true
+AUTO_REPLY_RESPOND_TO_RANDOM=true
+AUTO_REPLY_RANDOM_CHANCE=0.3
+```
+
+### Step 3: Install Dependencies
 
 ```bash
 npm install
 ```
 
-## Step 4: Run the Application
+This will install `groq-sdk` automatically.
+
+### Step 4: Update Index File
+
+Integrate AI responder into your handlers (see integration guide below).
+
+### Step 5: Run
 
 ```bash
-# Development
 npm run dev
-
-# Production
-npm run build
+# or
 npm start
 ```
 
 ## Configuration Options
 
-### Auto-Reply Behavior
+### AI Style
 
+Choose from:
+
+- **friendly** (default) - Warm, helpful, uses emojis
+- **professional** - Formal, accurate, no emojis
+- **casual** - Natural, like talking to a friend
+- **creative** - Out-of-the-box thinking
+
+Example:
 ```env
-# Enable/disable auto-reply
-AUTO_REPLY_ENABLED=true
-
-# Delay before responding (milliseconds)
-AUTO_REPLY_DELAY_MS=1000
-
-# Max messages to keep in context
-AUTO_REPLY_MAX_CONTEXT=10
-
-# Response style: friendly, professional, casual
-AUTO_REPLY_STYLE=friendly
+AI_STYLE=casual
 ```
 
-## How Auto-Reply Works
+### Auto-Reply Triggers
 
-1. **Always responds to**:
-   - Direct mentions (@bot)
-   - Questions (messages with ?)
+```env
+# Respond when mentioned
+AUTO_REPLY_RESPOND_TO_MENTIONS=true
 
-2. **Might respond to**:
-   - Normal messages (30% chance)
+# Respond to questions (messages with ?)
+AUTO_REPLY_RESPOND_TO_QUESTIONS=true
 
-3. **Never responds to**:
-   - Commands (starting with /)
-   - Very short messages (< 3 characters)
+# Respond to random messages
+AUTO_REPLY_RESPOND_TO_RANDOM=true
 
-## Groq Models Available
+# Probability for random responses (0.0 - 1.0)
+AUTO_REPLY_RANDOM_CHANCE=0.3
+```
 
-- `mixtral-8x7b-32768` - Fast & Balanced (default)
-- `llama2-70b-4096` - Better quality but slower
+### Timing
 
-## Costs
+```env
+# Delay before sending response (ms)
+# Higher = more natural, Lower = faster
+AUTO_REPLY_DELAY_MS=1000
+```
 
-✅ **Completely free** - No rate limits on free tier
-✅ **No credit card required**
-✅ **Unlimited requests** (within fair use)
+## Integration with Handlers
+
+### In `src/telegram/handler.ts`:
+
+```typescript
+import { AIResponder } from '../middleware/ai-responder';
+
+// Initialize in your handler setup
+let aiResponder: AIResponder | null = null;
+
+export function setupAIResponder(responder: AIResponder) {
+  aiResponder = responder;
+}
+
+// In message handler
+if (aiResponder && aiResponder.isEnabled()) {
+  const shouldRespond = aiResponder.shouldRespond(message.text, {
+    isCommand: false,
+    minLength: 3,
+  });
+
+  if (shouldRespond) {
+    const aiResponse = await aiResponder.generateResponseWithDelay(message.text);
+    if (aiResponse) {
+      // Send to Zalo
+      // ...
+    }
+  }
+}
+```
+
+### In `src/zalo/handler.ts`:
+
+Similar pattern for Zalo messages.
+
+## Available AI Styles
+
+### Friendly (Default)
+```
+Prompt: "You are a helpful AI assistant..."
+Characteristics: Warm, helpful, uses emojis
+Best for: General conversations, support
+```
+
+### Professional
+```
+Prompt: "You are a professional AI assistant..."
+Characteristics: Formal, accurate, no emojis
+Best for: Work, serious discussions
+```
+
+### Casual
+```
+Prompt: "You are a friend AI..."
+Characteristics: Natural, relaxed, like a friend
+Best for: Casual chats, fun conversations
+```
+
+### Creative
+```
+Prompt: "You are a creative AI assistant..."
+Characteristics: Out-of-the-box, imaginative
+Best for: Brainstorming, fun ideas
+```
 
 ## Troubleshooting
 
-### "GROQ_API_KEY is required"
-- Make sure `AI_ENABLED=true` and `GROQ_API_KEY=gsk_...` in `.env`
+### Issue: "GROQ_API_KEY is not set"
 
-### "Empty response from Groq"
-- Check your API key is valid
-- Check your internet connection
-
-### Bot not responding
-- Check `AUTO_REPLY_ENABLED=true` in `.env`
-- Make sure the message is not a command
-- Check if Groq API is working
-
-## Monitoring
-
-Check logs for:
-```
-Groq API error: ...
-AI response generation failed: ...
+**Solution**: Make sure you added the key to `.env`:
+```bash
+echo "GROQ_API_KEY=gsk_your_key_here" >> .env
 ```
 
-## Future Enhancements
+### Issue: "API error: 401 Unauthorized"
 
-- [ ] Support for multiple Groq models
-- [ ] Cost tracking
-- [ ] User-specific personalities
-- [ ] Context window management
-- [ ] Admin control commands
+**Solution**: Your API key is invalid. Get a new one from https://console.groq.com/keys
+
+### Issue: "Slow responses"
+
+**Solution**: This might be Groq servers being busy. Try:
+- Reducing `AUTO_REPLY_DELAY_MS`
+- Checking Groq status at https://status.groq.com
+
+### Issue: "Too many responses"
+
+**Solution**: Reduce `AUTO_REPLY_RANDOM_CHANCE`:
+```env
+AUTO_REPLY_RANDOM_CHANCE=0.1  # 10% instead of 30%
+```
+
+## Groq Models
+
+Available models:
+
+| Model | Speed | Quality | Best For |
+|-------|-------|---------|----------|
+| mixtral-8x7b-32768 | ⚡⚡⚡ | ⭐⭐⭐⭐ | **Default** |
+| llama2-70b | ⚡⚡ | ⭐⭐⭐ | Detailed |
+| gemma-7b-it | ⚡⚡⚡ | ⭐⭐⭐ | Fast |
+
+Change model in `.env`:
+```env
+GROQ_MODEL=llama2-70b
+```
+
+## Rate Limits
+
+Groq free tier:
+- ✅ No hard limits
+- ⚠️ Fair use policy applied
+- 💡 Recommended: 60 requests/minute for stability
+
+## Cost
+
+**100% FREE** - Groq provides free inference API for everyone.
+
+## API Docs
+
+- https://console.groq.com/docs/speech-text
+- https://console.groq.com/docs/text-chat
+
+## Support
+
+- Groq Discord: https://discord.gg/groq
+- Groq Docs: https://console.groq.com/docs
+
+## Next Steps
+
+1. ✅ Set up `.env` with your Groq API key
+2. ✅ Integrate AI responder into handlers
+3. ✅ Test auto-reply feature
+4. ✅ Customize style and triggers as needed
+
+Enjoy AI-powered auto-replies! 🚀

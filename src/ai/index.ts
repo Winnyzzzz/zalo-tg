@@ -1,2 +1,7 @@
-export { GroqProvider, AIProvider } from './groq-provider';
-export { SYSTEM_PROMPTS, GROQ_MODELS } from './prompt-templates';
+export { GroqProvider, type AIProviderOptions, type AIResponse } from './groq-provider';
+export {
+  PROMPT_TEMPLATES,
+  getSystemPrompt,
+  getAllStyles,
+  type PromptTemplate,
+} from './prompt-templates';

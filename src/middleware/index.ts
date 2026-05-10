@@ -1,1 +1,1 @@
-export { AIResponder, AIResponderConfig } from './ai-responder';
+export { AIResponder, type AIResponderOptions } from './ai-responder';

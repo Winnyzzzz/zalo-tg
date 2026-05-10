@@ -1,35 +1,42 @@
 import Groq from 'groq-sdk';
 
-export interface AIProvider {
-  generateResponse(message: string, context?: string): Promise<string>;
-  isEnabled(): boolean;
+export interface AIProviderOptions {
+  apiKey: string;
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
 }
 
-export class GroqProvider implements AIProvider {
+export interface AIResponse {
+  content: string;
+  tokensUsed?: number;
+  error?: string;
+}
+
+export class GroqProvider {
   private client: Groq;
-  private enabled: boolean;
+  private model: string;
+  private maxTokens: number;
+  private temperature: number;
 
-  constructor(apiKey: string | undefined) {
-    this.enabled = !!apiKey;
-    if (apiKey) {
-      this.client = new Groq({ apiKey });
-    }
-  }
-
-  isEnabled(): boolean {
-    return this.enabled;
-  }
-
-  async generateResponse(message: string, context?: string): Promise<string> {
-    if (!this.enabled) {
-      throw new Error('Groq AI is not enabled');
+  constructor(options: AIProviderOptions) {
+    if (!options.apiKey) {
+      throw new Error('Groq API key is required');
     }
 
+    this.client = new Groq({
+      apiKey: options.apiKey,
+    });
+
+    this.model = options.model || 'mixtral-8x7b-32768';
+    this.maxTokens = options.maxTokens || 150;
+    this.temperature = options.temperature || 0.7;
+  }
+
+  async generateResponse(message: string, systemPrompt: string): Promise<AIResponse> {
     try {
-      const systemPrompt = this.buildSystemPrompt(context);
-
       const response = await this.client.chat.completions.create({
-        model: 'mixtral-8x7b-32768',
+        model: this.model,
         messages: [
           {
             role: 'system',
@@ -40,33 +47,81 @@ export class GroqProvider implements AIProvider {
             content: message,
           },
         ],
-        max_tokens: 150,
-        temperature: 0.7,
+        max_tokens: this.maxTokens,
+        temperature: this.temperature,
       });
 
-      const content = response.choices[0]?.message?.content;
-      if (!content) {
-        throw new Error('Empty response from Groq');
+      const content = response.choices[0]?.message?.content || '';
+
+      if (!content.trim()) {
+        return {
+          content: '',
+          error: 'Empty response from Groq',
+        };
       }
 
-      return content.trim();
+      return {
+        content: content.trim(),
+        tokensUsed: response.usage?.total_tokens,
+      };
     } catch (error) {
-      console.error('Groq API error:', error);
-      throw error;
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('Groq API error:', errorMessage);
+      return {
+        content: '',
+        error: errorMessage,
+      };
     }
   }
 
-  private buildSystemPrompt(context?: string): string {
-    let prompt = `Bạn là một trợ lý thân thiện và hữu ích.`;
-    prompt += `\n- Trả lời ngắn gọn (1-3 câu tối đa).`;
-    prompt += `\n- Nếu không biết, hãy nói "Mình không biết, xin lỗi bạn!".`;
-    prompt += `\n- Giữ tính cách thân thiện, tự nhiên.`;
-    prompt += `\n- Trả lời bằng tiếng Việt.`;
+  async generateResponseWithContext(
+    message: string,
+    systemPrompt: string,
+    context: Array<{ role: 'user' | 'assistant'; content: string }>
+  ): Promise<AIResponse> {
+    try {
+      const messages = [
+        {
+          role: 'system' as const,
+          content: systemPrompt,
+        },
+        ...context.map((msg) => ({
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content,
+        })),
+        {
+          role: 'user' as const,
+          content: message,
+        },
+      ];
 
-    if (context) {
-      prompt += `\n\nBối cảnh: ${context}`;
+      const response = await this.client.chat.completions.create({
+        model: this.model,
+        messages: messages as any,
+        max_tokens: this.maxTokens,
+        temperature: this.temperature,
+      });
+
+      const content = response.choices[0]?.message?.content || '';
+
+      if (!content.trim()) {
+        return {
+          content: '',
+          error: 'Empty response from Groq',
+        };
+      }
+
+      return {
+        content: content.trim(),
+        tokensUsed: response.usage?.total_tokens,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('Groq API error:', errorMessage);
+      return {
+        content: '',
+        error: errorMessage,
+      };
     }
-
-    return prompt;
   }
 }

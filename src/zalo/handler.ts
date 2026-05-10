@@ -11,6 +11,7 @@ import { config } from '../config.js';
 import { downloadToTemp, cleanTemp } from '../utils/media.js';
 import { applyMentionsHtml, formatGroupMsgHtml, formatGroupMsg, groupCaption, topicName, truncate, escapeHtml } from '../utils/format.js';
 import { msgStore, userCache, pollStore, sentMsgStore, zaloAlbumStore, type ZaloQuoteData } from '../store.js';
+import { getAIResponder } from '../middleware/index.js';
 
 // ── Bank card HTML parser ────────────────────────────────────────────────────
 interface BankCardInfo {
@@ -183,6 +184,14 @@ function buildScoreText(header: string, options: Pick<PollOptions, 'content' | '
 const _memberCacheLoaded = new Set<string>();
 
 export function setupZaloHandler(api: ZaloAPI): void {
+  const aiResponder = getAIResponder();
+  // Get bot's own Zalo UID for mention detection
+  let selfUid: string | undefined;
+  try {
+    const ctx = (api as { getContext?: () => { uid?: string } }).getContext?.();
+    selfUid = ctx?.uid;
+  } catch { /* ignore */ }
+
   // Pre-populate userCache for all existing group topics on startup
   for (const entry of store.all()) {
     if (entry.type === 1 /* Group */) {
@@ -281,6 +290,26 @@ export function setupZaloHandler(api: ZaloAPI): void {
           { ...tgBase, parse_mode: 'HTML' },
         );
         saveTgMapping(sent);
+
+        // ── AI auto-reply ───────────────────────────────────────────────────
+        if (aiResponder?.isEnabled()) {
+          const isMention = !!(selfUid && msg.data.mentions?.some(m => m.uid === selfUid));
+          if (aiResponder.shouldRespond(body, {
+            threadId: zaloId,
+            isMention,
+            isFromSelf: false, // msg.isSelf đã được lọc ở trên
+          })) {
+            void (async () => {
+              const reply = await aiResponder.generateReply(zaloId, body);
+              if (!reply) return;
+              try {
+                await api.sendMessage({ msg: reply, quote: msg }, zaloId, type);
+              } catch (e) {
+                console.error('[AI→Zalo] sendMessage failed:', e);
+              }
+            })();
+          }
+        }
         return;
       }
 
